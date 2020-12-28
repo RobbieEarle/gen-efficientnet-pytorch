@@ -37,4 +37,4 @@ echo ""
 echo "SAVE_PATH=$SAVE_PATH"
 echo "SEED=$SEED"
 
-python validate.py /scratch/ssd001/datasets/imagenet/validation/ --save_path $SAVE_PATH --check_path $CHECK_DIR --model tf_efficientnet_b0 -b 64 --img-size 224 --crop-pct 0.875 --interpolation bicubic
+python validate.py /scratch/ssd001/datasets/imagenet/val/ --save_path $SAVE_PATH --check_path $CHECK_DIR --model tf_efficientnet_b0 -b 64 --img-size 224 --crop-pct 0.875 --interpolation bicubic
