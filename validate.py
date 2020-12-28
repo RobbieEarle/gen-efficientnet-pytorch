@@ -12,6 +12,9 @@ from contextlib import suppress
 import geffnet
 from data import Dataset, create_loader, resolve_data_config
 from utils import accuracy, AverageMeter
+import os
+import datetime
+import csv
 
 has_native_amp = False
 try:
@@ -61,6 +64,9 @@ parser.add_argument('--channels-last', action='store_true', default=False,
                     help='Use channels_last memory layout')
 parser.add_argument('--amp', action='store_true', default=False,
                     help='Use native Torch AMP mixed precision.')
+parser.add_argument('--save_path', type=str, default='', help='Where to save results')
+parser.add_argument('--check_path', type=str, default='', help='Where to save checkpoints')
+parser.add_argument('--model_type', type=str, default='baseline', help='What type of model is being evaluated')
 
 
 def main():
@@ -123,40 +129,93 @@ def main():
     top1 = AverageMeter()
     top5 = AverageMeter()
 
+    fieldnames = ['model_type', 'loss', 'top1', 'top1a', 'top5', 'top5a']
+    outfile_path = os.path.join(args.save_path, 'efficientnet') + '.csv'
+    mid_checkpoint_path = os.path.join(args.check_path, 'efficientnet') + '.pth'
+    checkpoint = None
+
+    if not os.path.exists(outfile_path):
+        with open(outfile_path, mode='w') as out_file:
+            writer = csv.DictWriter(out_file, fieldnames=fieldnames, lineterminator='\n')
+            writer.writeheader()
+    if os.path.exists(mid_checkpoint_path):
+        checkpoint = torch.load(mid_checkpoint_path)
+
+    loaded_iteration = -1
+    if checkpoint is not None:
+        model.load_state_dict(checkpoint['state_dict'])
+        if args.channels_last:
+            model = model.to(memory_format=torch.channels_last)
+        if args.torchscript:
+            torch.jit.optimized_execution(True)
+            model = torch.jit.script(model)
+        if not args.no_cuda:
+            if args.num_gpu > 1:
+                model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu))).cuda()
+            else:
+                model = model.cuda()
+        loaded_iteration = checkpoint['iteration']
+        batch_time = checkpoint['batch_time']
+        losses = checkpoint['loss']
+        top1 = checkpoint['top1']
+        top5 = checkpoint['top5']
+        print("*** LOADED CHECKPOINT ***")
+
     model.eval()
     end = time.time()
     with torch.no_grad():
         for i, (input, target) in enumerate(loader):
-            if not args.no_cuda:
-                target = target.cuda()
-                input = input.cuda()
-            if args.channels_last:
-                input = input.contiguous(memory_format=torch.channels_last)
+            if i > loaded_iteration:
+                if not args.no_cuda:
+                    target = target.cuda()
+                    input = input.cuda()
+                if args.channels_last:
+                    input = input.contiguous(memory_format=torch.channels_last)
 
-            # compute output
-            with amp_autocast():
-                output = model(input)
-                loss = criterion(output, target)
+                # compute output
+                with amp_autocast():
+                    output = model(input)
+                    loss = criterion(output, target)
 
-            # measure accuracy and record loss
-            prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-            losses.update(loss.item(), input.size(0))
-            top1.update(prec1.item(), input.size(0))
-            top5.update(prec5.item(), input.size(0))
+                # measure accuracy and record loss
+                prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
+                losses.update(loss.item(), input.size(0))
+                top1.update(prec1.item(), input.size(0))
+                top5.update(prec5.item(), input.size(0))
 
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+                # measure elapsed time
+                batch_time.update(time.time() - end)
+                end = time.time()
 
-            if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f}, {rate_avg:.3f}/s) \t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                    i, len(loader), batch_time=batch_time,
-                    rate_avg=input.size(0) / batch_time.avg,
-                    loss=losses, top1=top1, top5=top5))
+                if i % args.print_freq == 0:
+                    print('Test: [{0}/{1}]\t'
+                          'Time {batch_time.val:.3f} ({batch_time.avg:.3f}, {rate_avg:.3f}/s) \t'
+                          'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                          'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                          'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                        i, len(loader), batch_time=batch_time,
+                        rate_avg=input.size(0) / batch_time.avg,
+                        loss=losses, top1=top1, top5=top5))
+
+                    with open(outfile_path, mode='a') as out_file:
+                        writer = csv.DictWriter(out_file, fieldnames=fieldnames, lineterminator='\n')
+                        writer.writerow({'model_type': args.model_type,
+                                         'batch_time': batch_time,
+                                         'loss': losses,
+                                         'top1': top1,
+                                         'top1a': str(100. - top1.avg),
+                                         'top5': top5,
+                                         'top5a': str(100. - top5.avg)
+                                         })
+
+                    if args.check_path != '':
+                        torch.save({'state_dict': model.state_dict(),
+                                    'batch_time': batch_time,
+                                    'loss': losses,
+                                    'iteration': i,
+                                    'top1': top1,
+                                    'top5': top5,
+                                    }, mid_checkpoint_path)
 
     print(' * Prec@1 {top1.avg:.3f} ({top1a:.3f}) Prec@5 {top5.avg:.3f} ({top5a:.3f})'.format(
         top1=top1, top1a=100-top1.avg, top5=top5, top5a=100.-top5.avg))
