@@ -129,7 +129,7 @@ def main():
     top1 = AverageMeter()
     top5 = AverageMeter()
 
-    fieldnames = ['model_type', 'loss', 'top1', 'top1a', 'top5', 'top5a']
+    fieldnames = ['model_type', 'batch_time', 'loss', 'top1', 'top1a', 'top5', 'top5a']
     outfile_path = os.path.join(args.save_path, 'efficientnet') + '.csv'
     mid_checkpoint_path = os.path.join(args.check_path, 'efficientnet') + '.pth'
     checkpoint = None
