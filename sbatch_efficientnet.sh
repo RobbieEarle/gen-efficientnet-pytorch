@@ -12,7 +12,7 @@
 #SBATCH --job-name=p1_eff_baseline
 
 source ~/.bashrc
-source activate ~/venvs/combinact
+source activate ~/venvs/efficientnet
 
 SAVE_PATH="$1"
 SEED="$SLURM_ARRAY_TASK_ID"
